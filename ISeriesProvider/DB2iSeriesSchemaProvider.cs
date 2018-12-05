@@ -20,7 +20,11 @@ namespace LinqToDB.DataProvider.DB2iSeries
 			var sql = $@"
 				Select 
 				  Column_text 
-				, case when CCSID = 65535 and Data_Type in ('CHAR', 'VARCHAR') then TRIM(Data_Type) || ' FOR BIT DATA' else Data_Type end as Data_Type
+				, case 
+                    when CCSID = 65535 and Data_Type in ('CHAR', 'VARCHAR')
+                    then TRIM(Data_Type) || ' FOR BIT DATA'
+                    when Data_Type = 'TIMESTMP' then 'TIMESTAMP'
+                    else Data_Type end as Data_Type
 				, Is_Identity
 				, Is_Nullable
 				, Length
@@ -30,7 +34,7 @@ namespace LinqToDB.DataProvider.DB2iSeries
 				, Table_Name
 				, Table_Schema
 				, Column_Name
-				From QSYS2/SYSCOLUMNS
+				From {dataConnection.GetTableName("QSYS2","SYSCOLUMNS")}
 				where System_Table_Schema in('{GetLibList(dataConnection)}')
 				 ";
 
@@ -54,7 +58,7 @@ namespace LinqToDB.DataProvider.DB2iSeries
 			return list;
 		}
 
-		protected override DataType GetDataType(string dataType, string columnType, long? length, int? prec, int? scale)
+        protected override DataType GetDataType(string dataType, string columnType, long? length, int? prec, int? scale)
 		{
 			switch (dataType)
 			{
@@ -77,7 +81,7 @@ namespace LinqToDB.DataProvider.DB2iSeries
 				case "SMALLINT": return DataType.Int16;
 				case "TIME": return DataType.Time;
 				case "TIMESTAMP": return DataType.Timestamp;
-				case "VARBINARY": return DataType.VarBinary;
+                case "VARBINARY": return DataType.VarBinary;
 				case "VARCHAR": return DataType.VarChar;
 				case "VARCHAR FOR BIT DATA": return DataType.VarBinary;
 				case "VARGRAPHIC": return DataType.Text;
@@ -96,9 +100,9 @@ namespace LinqToDB.DataProvider.DB2iSeries
 		  , uk.Column_Name  As OtherColumn
 		  , uk.Table_Schema As OtherSchema
 		  , uk.Table_Name   As OtherTable
-		  From QSYS2/SYSREFCST ref
-		  Join QSYS2/SYSKEYCST fk on(fk.Constraint_Schema, fk.Constraint_Name) = (ref.Constraint_Schema, ref.Constraint_Name)
-		  Join QSYS2/SYSKEYCST uk on(uk.Constraint_Schema, uk.Constraint_Name) = (ref.Unique_Constraint_Schema, ref.Unique_Constraint_Name)
+		  From {dataConnection.GetTableName("QSYS2", "SYSREFCST")} ref
+		  Join {dataConnection.GetTableName("QSYS2", "SYSKEYCST")} fk on(fk.Constraint_Schema, fk.Constraint_Name) = (ref.Constraint_Schema, ref.Constraint_Name)
+		  Join {dataConnection.GetTableName("QSYS2", "SYSKEYCST")} uk on(uk.Constraint_Schema, uk.Constraint_Name) = (ref.Unique_Constraint_Schema, ref.Unique_Constraint_Name)
 		  Where uk.Ordinal_Position = fk.Ordinal_Position
 		  And fk.System_Table_Schema in('{GetLibList(dataConnection)}')
 		  Order By ThisSchema, ThisTable, Constraint_Name, Ordinal_Position
@@ -127,8 +131,8 @@ namespace LinqToDB.DataProvider.DB2iSeries
 			   , cst.table_NAME 
 			   , col.Ordinal_position 
 			   , col.Column_Name   
-		  From QSYS2/SYSKEYCST col
-		  Join QSYS2/SYSCST    cst On(cst.constraint_SCHEMA, cst.constraint_NAME, cst.constraint_type) = (col.constraint_SCHEMA, col.constraint_NAME, 'PRIMARY KEY')
+		  From {dataConnection.GetTableName("QSYS2", "SYSKEYCST")} col
+		  Join {dataConnection.GetTableName("QSYS2", "SYSCST")}    cst On(cst.constraint_SCHEMA, cst.constraint_NAME, cst.constraint_type) = (col.constraint_SCHEMA, col.constraint_NAME, 'PRIMARY KEY')
 		  And cst.System_Table_Schema in('{GetLibList(dataConnection)}')
 		  Order By cst.table_SCHEMA, cst.table_NAME, col.Ordinal_position
 		  ";
@@ -157,7 +161,7 @@ namespace LinqToDB.DataProvider.DB2iSeries
 		  , Routine_Type
 		  , Specific_Name
 		  , Specific_Schema
-		  From QSYS2/SYSROUTINES 
+		  From {dataConnection.GetTableName("QSYS2", "SYSROUTINES")}
 		  Where Specific_Schema in('{GetLibList(dataConnection)}')
 		  Order By Specific_Schema, Specific_Name
 		  ";
@@ -197,7 +201,7 @@ namespace LinqToDB.DataProvider.DB2iSeries
 		  , Parameter_Name
 		  , Specific_Name
 		  , Specific_Schema
-		  From QSYS2/SYSPARMS 
+		  From {dataConnection.GetTableName("QSYS2", "SYSPARMS")} 
 		  where Specific_Schema in('{GetLibList(dataConnection)}')
 		  Order By Specific_Schema, Specific_Name, Parameter_Name
 		  ";
@@ -237,7 +241,7 @@ namespace LinqToDB.DataProvider.DB2iSeries
 				  , Table_Text
 				  , Table_Type
 				  , System_Table_Schema
-				  From QSYS2/SYSTABLES 
+				  From {dataConnection.GetTableName("QSYS2", "SYSTABLES")}
 				  Where Table_Type In('L', 'P', 'T', 'V')
 				  And System_Table_Schema in ('{GetLibList(dataConnection)}')	
 				  Order By System_Table_Schema, System_Table_Name
@@ -293,7 +297,8 @@ namespace LinqToDB.DataProvider.DB2iSeries
 				case "SMALLINT":
 				case "BIGINT":
 				case "TIMESTMP":
-				case "DATE":
+				case "TIMESTAMP":
+                case "DATE":
 				case "TIME":
 				case "VARG":
 				case "DECFLOAT":
