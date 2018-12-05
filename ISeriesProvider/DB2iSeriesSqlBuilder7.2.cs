@@ -5,8 +5,9 @@
 
     public class DB2iSeriesSqlBuilder7_2 : DB2iSeriesSqlBuilder
     {
-		public DB2iSeriesSqlBuilder7_2(ISqlOptimizer sqlOptimizer, SqlProviderFlags sqlProviderFlags, ValueToSqlConverter valueToSqlConverter)
-	        : base(sqlOptimizer, sqlProviderFlags, valueToSqlConverter)
+		public DB2iSeriesSqlBuilder7_2(ISqlOptimizer sqlOptimizer, SqlProviderFlags sqlProviderFlags,
+            ValueToSqlConverter valueToSqlConverter, DB2iSeriesNamingConvention namingConvention = default)
+            : base(sqlOptimizer, sqlProviderFlags, valueToSqlConverter, namingConvention)
 	    {
 	    }
 

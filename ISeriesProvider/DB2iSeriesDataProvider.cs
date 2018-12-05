@@ -1,7 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Data;
-using System.Linq;
 using System.Linq.Expressions;
 using System.Threading;
 using System.Threading.Tasks;
@@ -16,18 +15,22 @@ namespace LinqToDB.DataProvider.DB2iSeries
 
     public class DB2iSeriesDataProvider : DynamicDataProviderBase
     {
-	    private DB2iSeriesLevels minLevel;
+        private DB2iSeriesLevels minLevel;
 
-	    private bool mapGuidAsString;
+        private bool mapGuidAsString;
+        private bool preventNVarChar;
 
-	    public DB2iSeriesDataProvider() : this(DB2iSeriesProviderName.DB2, DB2iSeriesLevels.Any, false)
-	    {
-	    }
+        public DB2iSeriesNamingConvention NamingConvention { get; private set; }
 
-	    public DB2iSeriesDataProvider(string name, DB2iSeriesLevels minLevel, bool mapGuidAsString) : base(name, null)
+        public DB2iSeriesDataProvider() : this(DB2iSeriesProviderName.DB2, DB2iSeriesLevels.Any, false)
+        {
+        }
+
+        public DB2iSeriesDataProvider(string name, DB2iSeriesLevels minLevel, bool mapGuidAsString, bool preventNVarChar = false) : base(name, null)
         {
             this.minLevel = minLevel;
-	        this.mapGuidAsString = mapGuidAsString;
+            this.mapGuidAsString = mapGuidAsString;
+            this.preventNVarChar = preventNVarChar;
 
             LoadExpressions(name, mapGuidAsString);
 
@@ -37,9 +40,12 @@ namespace LinqToDB.DataProvider.DB2iSeries
             SqlProviderFlags.CanCombineParameters = false;
             SqlProviderFlags.IsParameterOrderDependent = true;
             SqlProviderFlags.IsCommonTableExpressionsSupported = true;
-            
-			if(mapGuidAsString)
-				SqlProviderFlags.CustomFlags.Add(DB2iSeriesTools.MapGuidAsString);
+
+            if (mapGuidAsString)
+                SqlProviderFlags.CustomFlags.Add(DB2iSeriesTools.MapGuidAsString);
+
+            if (preventNVarChar)
+                SqlProviderFlags.CustomFlags.Add(DB2iSeriesTools.PreventNVarChar);
 
             SetCharField("CHAR", (r, i) => r.GetString(i).TrimEnd(' '));
             SetCharField("NCHAR", (r, i) => r.GetString(i).TrimEnd(' '));
@@ -47,7 +53,7 @@ namespace LinqToDB.DataProvider.DB2iSeries
             _sqlOptimizer = new DB2iSeriesSqlOptimizer(SqlProviderFlags);
         }
 
-        
+
         readonly DB2iSeriesSqlOptimizer _sqlOptimizer;
         static Action<IDbDataParameter> _setBlob;
         DB2iSeriesBulkCopy _bulkCopy;
@@ -57,7 +63,13 @@ namespace LinqToDB.DataProvider.DB2iSeries
         public override string ConnectionNamespace => "";
         protected override string ConnectionTypeName => DB2iSeriesTools.ConnectionTypeName;
         protected override string DataReaderTypeName => DB2iSeriesTools.DataReaderTypeName;
-        public string DummyTableName => DB2iSeriesTools.iSeriesDummyTableName();
+        public string DummyTableName => DB2iSeriesTools.iSeriesDummyTableName(NamingConvention);
+
+        protected override IDbConnection CreateConnectionInternal(string connectionString)
+        {
+            NamingConvention = DB2iSeriesTools.GetDB2iSeriesNamingConvention(connectionString);
+            return base.CreateConnectionInternal(connectionString);
+        }
 
         public override BulkCopyRowsCopied BulkCopy<T>(DataConnection dataConnection, BulkCopyOptions options, IEnumerable<T> source)
         {
@@ -72,9 +84,15 @@ namespace LinqToDB.DataProvider.DB2iSeries
         }
         public override ISqlBuilder CreateSqlBuilder()
         {
-            return minLevel == DB2iSeriesLevels.V7_1_38 ?
-                new DB2iSeriesSqlBuilder7_2(GetSqlOptimizer(), SqlProviderFlags, MappingSchema.ValueToSqlConverter) :
-                new DB2iSeriesSqlBuilder(GetSqlOptimizer(), SqlProviderFlags, MappingSchema.ValueToSqlConverter);
+            switch (minLevel)
+            {
+                case DB2iSeriesLevels.V7_1_38:
+                    return new DB2iSeriesSqlBuilder7_2(GetSqlOptimizer(), SqlProviderFlags, MappingSchema.ValueToSqlConverter, NamingConvention);
+                case DB2iSeriesLevels.Any:
+                default:
+                    return new DB2iSeriesSqlBuilder(GetSqlOptimizer(), SqlProviderFlags, MappingSchema.ValueToSqlConverter, NamingConvention);
+            }
+
         }
 
         public override ISchemaProvider GetSchemaProvider()
@@ -92,38 +110,38 @@ namespace LinqToDB.DataProvider.DB2iSeries
             base.InitCommand(dataConnection, commandType, commandText, parameters);
         }
 
-	  //  protected override IDbConnection CreateConnectionInternal(string connectionString)
-	  //  {
-	  //      var vers73 = new[] { "7.1.38", "7.2", "7.3" };
-		 //   var parts = connectionString.Split(';').ToList();
-		 //   var gas = parts.FirstOrDefault(p => p.ToLower().StartsWith("mapguidasstring"));
-			//var minVer = parts.FirstOrDefault(p => p.ToLower().StartsWith("minver"));
+        //  protected override IDbConnection CreateConnectionInternal(string connectionString)
+        //  {
+        //      var vers73 = new[] { "7.1.38", "7.2", "7.3" };
+        //   var parts = connectionString.Split(';').ToList();
+        //   var gas = parts.FirstOrDefault(p => p.ToLower().StartsWith("mapguidasstring"));
+        //var minVer = parts.FirstOrDefault(p => p.ToLower().StartsWith("minver"));
 
-		 //   if (!string.IsNullOrWhiteSpace(gas))
-		 //   {
-			//    mapGuidAsString = gas.EndsWith("true", StringComparison.CurrentCultureIgnoreCase);
-			//    parts.Remove(gas);
-		 //   }
+        //   if (!string.IsNullOrWhiteSpace(gas))
+        //   {
+        //    mapGuidAsString = gas.EndsWith("true", StringComparison.CurrentCultureIgnoreCase);
+        //    parts.Remove(gas);
+        //   }
 
-		 //   if (!string.IsNullOrWhiteSpace(minVer))
-		 //   {
-			//	minLevel = vers73.Any(v => minVer.EndsWith(v, StringComparison.CurrentCultureIgnoreCase)) ? DB2iSeriesLevels.V7_1_38 : DB2iSeriesLevels.Any;
-			//	parts.Remove(minVer);
-			//}
+        //   if (!string.IsNullOrWhiteSpace(minVer))
+        //   {
+        //	minLevel = vers73.Any(v => minVer.EndsWith(v, StringComparison.CurrentCultureIgnoreCase)) ? DB2iSeriesLevels.V7_1_38 : DB2iSeriesLevels.Any;
+        //	parts.Remove(minVer);
+        //}
 
-		 //   var conString = string.Join(";", parts);
-			//return base.CreateConnectionInternal(conString);
-	  //  }
+        //   var conString = string.Join(";", parts);
+        //return base.CreateConnectionInternal(conString);
+        //  }
 
-	    static class MappingSchemaInstance
-	    {
-		    public static readonly DB2iSeriesMappingSchema BlobGuidMappingSchema = new DB2iSeriesMappingSchema(DB2iSeriesProviderName.DB2); 
-		    public static readonly DB2iSeriesMappingSchema StringGuidMappingSchema = new DB2iSeriesMappingSchema(DB2iSeriesProviderName.DB2_GAS);
-	    }
+        static class MappingSchemaInstance
+        {
+            public static readonly DB2iSeriesMappingSchema BlobGuidMappingSchema = new DB2iSeriesMappingSchema(DB2iSeriesProviderName.DB2);
+            public static readonly DB2iSeriesMappingSchema StringGuidMappingSchema = new DB2iSeriesMappingSchema(DB2iSeriesProviderName.DB2_GAS);
+        }
 
-		public override MappingSchema MappingSchema => mapGuidAsString
-		    ? MappingSchemaInstance.StringGuidMappingSchema
-		    : MappingSchemaInstance.BlobGuidMappingSchema;
+        public override MappingSchema MappingSchema => mapGuidAsString
+            ? MappingSchemaInstance.StringGuidMappingSchema
+            : MappingSchemaInstance.BlobGuidMappingSchema;
 
         #region Merge
         public override int Merge<T>(DataConnection dataConnection, Expression<Func<T, bool>> deletePredicate, bool delete, IEnumerable<T> source, string tableName, string databaseName, string schemaName)
@@ -135,25 +153,25 @@ namespace LinqToDB.DataProvider.DB2iSeries
             return new DB2iSeriesMerge().Merge(dataConnection, deletePredicate, delete, source, tableName, databaseName, schemaName);
         }
 
-	    public override Task<int> MergeAsync<T>(DataConnection dataConnection, Expression<Func<T, bool>> deletePredicate, bool delete, IEnumerable<T> source,
-		    string tableName, string databaseName, string schemaName, CancellationToken token)
-	    {
-		    if (delete)
-			    throw new LinqToDBException("DB2 MERGE statement does not support DELETE by source.");
+        public override Task<int> MergeAsync<T>(DataConnection dataConnection, Expression<Func<T, bool>> deletePredicate, bool delete, IEnumerable<T> source,
+            string tableName, string databaseName, string schemaName, CancellationToken token)
+        {
+            if (delete)
+                throw new LinqToDBException("DB2 MERGE statement does not support DELETE by source.");
 
-		    return new DB2iSeriesMerge().MergeAsync(dataConnection, deletePredicate, delete, source, tableName, databaseName, schemaName, token);
-	    }
+            return new DB2iSeriesMerge().MergeAsync(dataConnection, deletePredicate, delete, source, tableName, databaseName, schemaName, token);
+        }
 
-	    protected override BasicMergeBuilder<TTarget, TSource> GetMergeBuilder<TTarget, TSource>(
-		    DataConnection connection,
-		    IMergeable<TTarget, TSource> merge)
-	    {
-		    return new DB2iSeriesMergeBuilder<TTarget, TSource>(connection, merge);
-	    }
+        protected override BasicMergeBuilder<TTarget, TSource> GetMergeBuilder<TTarget, TSource>(
+            DataConnection connection,
+            IMergeable<TTarget, TSource> merge)
+        {
+            return new DB2iSeriesMergeBuilder<TTarget, TSource>(connection, merge);
+        }
 
-	    #endregion
+        #endregion
 
-		protected override void OnConnectionTypeCreated(Type connectionType)
+        protected override void OnConnectionTypeCreated(Type connectionType)
         {
             DB2iSeriesTypes.ConnectionType = connectionType;
 
@@ -346,61 +364,61 @@ namespace LinqToDB.DataProvider.DB2iSeries
 
         #endregion
 
-		private static object GetNullValue(Type type)
+        private static object GetNullValue(Type type)
         {
             dynamic getValue = Expression.Lambda<Func<object>>(Expression.Convert(Expression.Field(null, type, "Null"), typeof(object)));
             return getValue.Compile()();
         }
 
-		private static void LoadExpressions(string providerName, bool mapGuidAsString)
-		{
-			Linq.Expressions.MapMember(
-				providerName,
-				Linq.Expressions.M(() => Sql.Space(0)),
-				Linq.Expressions.N(() => Linq.Expressions.L<Int32?, String>(p0 => Sql.Convert(Sql.VarChar(1000), Linq.Expressions.Replicate(" ", p0)))));
-			Linq.Expressions.MapMember(
-				providerName,
-				Linq.Expressions.M(() => Sql.Stuff("", 0, 0, "")),
-				Linq.Expressions.N(() => Linq.Expressions.L<String, Int32?, Int32?, String, String>((p0, p1, p2, p3) => Linq.Expressions.AltStuff(p0, p1, p2, p3))));
-			Linq.Expressions.MapMember(
-				providerName,
-				Linq.Expressions.M(() => Sql.PadRight("", 0, ' ')),
-				Linq.Expressions.N(() => Linq.Expressions.L<String, Int32?, Char?, String>((p0, p1, p2) => p0.Length > p1 ? p0 : p0 + Linq.Expressions.VarChar(Linq.Expressions.Replicate(p2, p1 - p0.Length), 1000))));
-			Linq.Expressions.MapMember(
-				providerName,
-				Linq.Expressions.M(() => Sql.PadLeft("", 0, ' ')),
-				Linq.Expressions.N(() => Linq.Expressions.L<String, Int32?, Char?, String>((p0, p1, p2) => p0.Length > p1 ? p0 : Linq.Expressions.VarChar(Linq.Expressions.Replicate(p2, p1 - p0.Length), 1000) + p0)));
-			Linq.Expressions.MapMember(
-				providerName,
-				Linq.Expressions.M(() => Sql.ConvertTo<String>.From((Decimal)0)),
-				Linq.Expressions.N(() => Linq.Expressions.L<Decimal, String>((Decimal p) => Sql.TrimLeft(Sql.Convert<string, Decimal>(p), '0'))));
+        private static void LoadExpressions(string providerName, bool mapGuidAsString)
+        {
+            Linq.Expressions.MapMember(
+                providerName,
+                Linq.Expressions.M(() => Sql.Space(0)),
+                Linq.Expressions.N(() => Linq.Expressions.L<Int32?, String>(p0 => Sql.Convert(Sql.VarChar(1000), Linq.Expressions.Replicate(" ", p0)))));
+            Linq.Expressions.MapMember(
+                providerName,
+                Linq.Expressions.M(() => Sql.Stuff("", 0, 0, "")),
+                Linq.Expressions.N(() => Linq.Expressions.L<String, Int32?, Int32?, String, String>((p0, p1, p2, p3) => Linq.Expressions.AltStuff(p0, p1, p2, p3))));
+            Linq.Expressions.MapMember(
+                providerName,
+                Linq.Expressions.M(() => Sql.PadRight("", 0, ' ')),
+                Linq.Expressions.N(() => Linq.Expressions.L<String, Int32?, Char?, String>((p0, p1, p2) => p0.Length > p1 ? p0 : p0 + Linq.Expressions.VarChar(Linq.Expressions.Replicate(p2, p1 - p0.Length), 1000))));
+            Linq.Expressions.MapMember(
+                providerName,
+                Linq.Expressions.M(() => Sql.PadLeft("", 0, ' ')),
+                Linq.Expressions.N(() => Linq.Expressions.L<String, Int32?, Char?, String>((p0, p1, p2) => p0.Length > p1 ? p0 : Linq.Expressions.VarChar(Linq.Expressions.Replicate(p2, p1 - p0.Length), 1000) + p0)));
+            Linq.Expressions.MapMember(
+                providerName,
+                Linq.Expressions.M(() => Sql.ConvertTo<String>.From((Decimal)0)),
+                Linq.Expressions.N(() => Linq.Expressions.L<Decimal, String>((Decimal p) => Sql.TrimLeft(Sql.Convert<string, Decimal>(p), '0'))));
 
-			if (!mapGuidAsString)
-			{
-				Linq.Expressions.MapMember(
-					providerName,
-					Linq.Expressions.M(() => Sql.ConvertTo<String>.From(Guid.Empty)),
-					Linq.Expressions.N(() => Linq.Expressions.L<Guid, String>(
-						(Guid p) => Sql.Lower(Sql.Substring(Linq.Expressions.Hex(p), 7, 2)
-											  + Sql.Substring(Linq.Expressions.Hex(p), 5, 2)
-											  + Sql.Substring(Linq.Expressions.Hex(p), 3, 2)
-											  + Sql.Substring(Linq.Expressions.Hex(p), 1, 2)
-											  + "-" + Sql.Substring(Linq.Expressions.Hex(p), 11, 2)
-											  + Sql.Substring(Linq.Expressions.Hex(p), 9, 2)
-											  + "-" + Sql.Substring(Linq.Expressions.Hex(p), 15, 2)
-											  + Sql.Substring(Linq.Expressions.Hex(p), 13, 2)
-											  + "-" + Sql.Substring(Linq.Expressions.Hex(p), 17, 4)
-											  + "-" + Sql.Substring(Linq.Expressions.Hex(p), 21, 12)))));
-			}
+            if (!mapGuidAsString)
+            {
+                Linq.Expressions.MapMember(
+                    providerName,
+                    Linq.Expressions.M(() => Sql.ConvertTo<String>.From(Guid.Empty)),
+                    Linq.Expressions.N(() => Linq.Expressions.L<Guid, String>(
+                        (Guid p) => Sql.Lower(Sql.Substring(Linq.Expressions.Hex(p), 7, 2)
+                                              + Sql.Substring(Linq.Expressions.Hex(p), 5, 2)
+                                              + Sql.Substring(Linq.Expressions.Hex(p), 3, 2)
+                                              + Sql.Substring(Linq.Expressions.Hex(p), 1, 2)
+                                              + "-" + Sql.Substring(Linq.Expressions.Hex(p), 11, 2)
+                                              + Sql.Substring(Linq.Expressions.Hex(p), 9, 2)
+                                              + "-" + Sql.Substring(Linq.Expressions.Hex(p), 15, 2)
+                                              + Sql.Substring(Linq.Expressions.Hex(p), 13, 2)
+                                              + "-" + Sql.Substring(Linq.Expressions.Hex(p), 17, 4)
+                                              + "-" + Sql.Substring(Linq.Expressions.Hex(p), 21, 12)))));
+            }
 
-			Linq.Expressions.MapMember(
-				providerName,
-				Linq.Expressions.M(() => Sql.Log(0m, 0)),
-				Linq.Expressions.N(() => Linq.Expressions.L<Decimal?, Decimal?, Decimal?>((m, n) => Sql.Log(n) / Sql.Log(m))));
-			Linq.Expressions.MapMember(
-				providerName,
-				Linq.Expressions.M(() => Sql.Log(0.0, 0)),
-				Linq.Expressions.N(() => Linq.Expressions.L<Double?, Double?, Double?>((m, n) => Sql.Log(n) / Sql.Log(m))));
-		}
-	}
+            Linq.Expressions.MapMember(
+                providerName,
+                Linq.Expressions.M(() => Sql.Log(0m, 0)),
+                Linq.Expressions.N(() => Linq.Expressions.L<Decimal?, Decimal?, Decimal?>((m, n) => Sql.Log(n) / Sql.Log(m))));
+            Linq.Expressions.MapMember(
+                providerName,
+                Linq.Expressions.M(() => Sql.Log(0.0, 0)),
+                Linq.Expressions.N(() => Linq.Expressions.L<Double?, Double?, Double?>((m, n) => Sql.Log(n) / Sql.Log(m))));
+        }
+    }
 }

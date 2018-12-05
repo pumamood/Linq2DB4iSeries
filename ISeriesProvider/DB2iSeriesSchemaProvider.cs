@@ -20,7 +20,7 @@ namespace LinqToDB.DataProvider.DB2iSeries
 			var sql = $@"
 				Select 
 				  Column_text 
-				, case when CCSID = 65535 and Data_Type in ('CHAR', 'VARCHAR') then Data_Type || ' FOR BIT DATA' else Data_Type end as Data_Type
+				, case when CCSID = 65535 and Data_Type in ('CHAR', 'VARCHAR') then TRIM(Data_Type) || ' FOR BIT DATA' else Data_Type end as Data_Type
 				, Is_Identity
 				, Is_Nullable
 				, Length
@@ -163,7 +163,7 @@ namespace LinqToDB.DataProvider.DB2iSeries
 		  ";
 
 			//And {GetSchemaFilter("col.TBCREATOR")}
-			var defaultSchema = dataConnection.Execute<string>("select current_schema from sysibm.sysdummy1");
+			var defaultSchema = dataConnection.Execute<string>("select current_schema from " + DB2iSeriesTools.iSeriesDummyTableName(dataConnection));
 
 			ProcedureInfo drf(IDataReader dr)
 			{
@@ -243,8 +243,8 @@ namespace LinqToDB.DataProvider.DB2iSeries
 				  Order By System_Table_Schema, System_Table_Name
 				 ";
 
-			var defaultSchema = dataConnection.Execute<string>("select current_schema from sysibm.sysdummy1");
-			Func<IDataReader, TableInfo> drf = (IDataReader dr) => new TableInfo
+			var defaultSchema = dataConnection.Execute<string>("select current_schema from " + DB2iSeriesTools.iSeriesDummyTableName(dataConnection));
+            Func<IDataReader, TableInfo> drf = (IDataReader dr) => new TableInfo
 			{
 			    CatalogName = dr["Catalog_Name"].ToString().TrimEnd(),
 			    Description = dr["Table_Text"].ToString().TrimEnd(),
@@ -329,5 +329,294 @@ namespace LinqToDB.DataProvider.DB2iSeries
 
             return string.Join("','", liblist.ToString().Split(','));
 	    }
+        public override DatabaseSchema GetSchema(DataConnection dataConnection, GetSchemaOptions options = null)
+        {
+            if(options is GetTablesSchemaOptions)
+            {
+                var opt = options as GetTablesSchemaOptions;
+                if (options == null)
+                    opt = new GetTablesSchemaOptions();
+
+                IncludedSchemas = GetHashSet(options.IncludedSchemas, options.StringComparer);
+                ExcludedSchemas = GetHashSet(options.ExcludedSchemas, options.StringComparer);
+                IncludedCatalogs = GetHashSet(options.IncludedCatalogs, options.StringComparer);
+                ExcludedCatalogs = GetHashSet(options.ExcludedCatalogs, options.StringComparer);
+                var includedTables = GetHashSet(opt.IncludedTables, options.StringComparer);
+                var excludedTables = GetHashSet(opt.ExcludedTables, options.StringComparer);
+                GenerateChar1AsString = options.GenerateChar1AsString;
+
+                var dbConnection = (DbConnection)dataConnection.Connection;
+
+                InitProvider(dataConnection);
+
+                DataTypes = GetDataTypes(dataConnection);
+                DataTypesDic = new Dictionary<string, DataTypeInfo>(DataTypes.Count, StringComparer.OrdinalIgnoreCase);
+
+                foreach (var dt in DataTypes)
+                    if (!DataTypesDic.ContainsKey(dt.TypeName))
+                        DataTypesDic.Add(dt.TypeName, dt);
+
+                List<TableSchema> tables;
+                List<ProcedureSchema> procedures;
+
+                if (options.GetTables)
+                {
+                    tables =
+                    (
+                        from t in GetTables(dataConnection)
+                        where
+                            (IncludedSchemas.Count == 0 || IncludedSchemas.Contains(t.SchemaName)) &&
+                            (ExcludedSchemas.Count == 0 || !ExcludedSchemas.Contains(t.SchemaName)) &&
+                            (IncludedCatalogs.Count == 0 || IncludedCatalogs.Contains(t.CatalogName)) &&
+                            (ExcludedCatalogs.Count == 0 || !ExcludedCatalogs.Contains(t.CatalogName)) &&
+                            (includedTables.Count == 0 || includedTables.Contains(t.TableName)) &&
+                            (excludedTables.Count == 0 || !excludedTables.Contains(t.TableName))
+                        select new TableSchema
+                        {
+                            ID = t.TableID,
+                            CatalogName = t.CatalogName,
+                            SchemaName = t.SchemaName,
+                            TableName = t.TableName,
+                            Description = t.Description,
+                            IsDefaultSchema = t.IsDefaultSchema,
+                            IsView = t.IsView,
+                            TypeName = ToValidName(t.TableName),
+                            Columns = new List<ColumnSchema>(),
+                            ForeignKeys = new List<ForeignKeySchema>(),
+                            IsProviderSpecific = t.IsProviderSpecific
+                        }
+                    ).ToList();
+
+                    var pks = GetPrimaryKeys(dataConnection);
+
+                    #region Columns
+
+                    var columns =
+                        from c in GetColumns(dataConnection)
+
+                        join pk in pks
+                            on c.TableID + "." + c.Name equals pk.TableID + "." + pk.ColumnName into g2
+                        from pk in g2.DefaultIfEmpty()
+
+                        join t in tables on c.TableID equals t.ID
+
+                        orderby c.Ordinal
+                        select new { t, c, dt = GetDataType(c.DataType), pk };
+
+                    foreach (var column in columns)
+                    {
+                        var dataType = column.c.DataType;
+                        var systemType = GetSystemType(dataType, column.c.ColumnType, column.dt, column.c.Length, column.c.Precision, column.c.Scale);
+                        var isNullable = column.c.IsNullable;
+                        var columnType = column.c.ColumnType ?? GetDbType(dataType, column.dt, column.c.Length, column.c.Precision, column.c.Scale);
+
+                        column.t.Columns.Add(new ColumnSchema
+                        {
+                            Table = column.t,
+                            ColumnName = column.c.Name,
+                            ColumnType = columnType,
+                            IsNullable = isNullable,
+                            MemberName = ToValidName(column.c.Name),
+                            MemberType = ToTypeName(systemType, isNullable),
+                            SystemType = systemType ?? typeof(object),
+                            DataType = GetDataType(dataType, column.c.ColumnType, column.c.Length, column.c.Precision, column.c.Scale),
+                            ProviderSpecificType = GetProviderSpecificType(dataType),
+                            SkipOnInsert = column.c.SkipOnInsert || column.c.IsIdentity,
+                            SkipOnUpdate = column.c.SkipOnUpdate || column.c.IsIdentity,
+                            IsPrimaryKey = column.pk != null,
+                            PrimaryKeyOrder = column.pk?.Ordinal ?? -1,
+                            IsIdentity = column.c.IsIdentity,
+                            Description = column.c.Description,
+                            Length = column.c.Length,
+                            Precision = column.c.Precision,
+                            Scale = column.c.Scale,
+                        });
+                    }
+
+                    #endregion
+
+                    #region FK
+
+                    var fks = GetForeignKeys(dataConnection);
+
+                    foreach (var fk in fks.OrderBy(f => f.Ordinal))
+                    {
+                        var thisTable = (from t in tables where t.ID == fk.ThisTableID select t).FirstOrDefault();
+                        var otherTable = (from t in tables where t.ID == fk.OtherTableID select t).FirstOrDefault();
+
+                        if (thisTable == null || otherTable == null)
+                            continue;
+
+                        var thisColumn = (from c in thisTable.Columns where c.ColumnName == fk.ThisColumn select c).SingleOrDefault();
+                        var otherColumn = (from c in otherTable.Columns where c.ColumnName == fk.OtherColumn select c).SingleOrDefault();
+
+                        if (thisColumn == null || otherColumn == null)
+                            continue;
+
+                        var key = thisTable.ForeignKeys.FirstOrDefault(f => f.KeyName == fk.Name);
+
+                        if (key == null)
+                        {
+                            key = new ForeignKeySchema
+                            {
+                                KeyName = fk.Name,
+                                MemberName = ToValidName(fk.Name),
+                                ThisTable = thisTable,
+                                OtherTable = otherTable,
+                                ThisColumns = new List<ColumnSchema>(),
+                                OtherColumns = new List<ColumnSchema>(),
+                                CanBeNull = true,
+                            };
+
+                            thisTable.ForeignKeys.Add(key);
+                        }
+
+                        key.ThisColumns.Add(thisColumn);
+                        key.OtherColumns.Add(otherColumn);
+                    }
+
+                    #endregion
+
+                    var pst = GetProviderSpecificTables(dataConnection);
+
+                    if (pst != null)
+                        tables.AddRange(pst);
+                }
+                else
+                    tables = new List<TableSchema>();
+
+                if (options.GetProcedures)
+                {
+                    #region Procedures
+
+                    var sqlProvider = dataConnection.DataProvider.CreateSqlBuilder();
+                    var procs = GetProcedures(dataConnection);
+                    var procPparams = GetProcedureParameters(dataConnection);
+                    var n = 0;
+
+                    if (procs != null)
+                    {
+                        procedures =
+                        (
+                            from sp in procs
+                            where
+                                (IncludedSchemas.Count == 0 || IncludedSchemas.Contains(sp.SchemaName)) &&
+                                (ExcludedSchemas.Count == 0 || !ExcludedSchemas.Contains(sp.SchemaName)) &&
+                                (IncludedCatalogs.Count == 0 || IncludedCatalogs.Contains(sp.CatalogName)) &&
+                                (ExcludedCatalogs.Count == 0 || !ExcludedCatalogs.Contains(sp.CatalogName))
+                            join p in procPparams on sp.ProcedureID equals p.ProcedureID
+                            into gr
+                            select new ProcedureSchema
+                            {
+                                CatalogName = sp.CatalogName,
+                                SchemaName = sp.SchemaName,
+                                ProcedureName = sp.ProcedureName,
+                                MemberName = ToValidName(sp.ProcedureName),
+                                IsFunction = sp.IsFunction,
+                                IsTableFunction = sp.IsTableFunction,
+                                IsResultDynamic = sp.IsResultDynamic,
+                                IsAggregateFunction = sp.IsAggregateFunction,
+                                IsDefaultSchema = sp.IsDefaultSchema,
+                                Parameters =
+                                (
+                                    from pr in gr
+
+                                    join dt in DataTypes
+                                        on pr.DataType equals dt.TypeName into g1
+                                    from dt in g1.DefaultIfEmpty()
+
+                                    let systemType = GetSystemType(pr.DataType, null, dt, pr.Length, pr.Precision, pr.Scale)
+
+                                    orderby pr.Ordinal
+                                    select new ParameterSchema
+                                    {
+                                        SchemaName = pr.ParameterName,
+                                        SchemaType = GetDbType(pr.DataType, dt, pr.Length, pr.Precision, pr.Scale),
+                                        IsIn = pr.IsIn,
+                                        IsOut = pr.IsOut,
+                                        IsResult = pr.IsResult,
+                                        Size = pr.Length,
+                                        ParameterName = ToValidName(pr.ParameterName ?? "par" + ++n),
+                                        ParameterType = ToTypeName(systemType, true),
+                                        SystemType = systemType ?? typeof(object),
+                                        DataType = GetDataType(pr.DataType, null, pr.Length, pr.Precision, pr.Scale),
+                                        ProviderSpecificType = GetProviderSpecificType(pr.DataType),
+                                    }
+                                ).ToList()
+                            } into ps
+                            where ps.Parameters.All(p => p.SchemaType != "table type")
+                            select ps
+                        ).ToList();
+
+                        var current = 1;
+
+                        var isActiveTransaction = dataConnection.Transaction != null;
+
+                        if (GetProcedureSchemaExecutesProcedure && isActiveTransaction)
+                            throw new LinqToDBException("Cannot read schema with GetSchemaOptions.GetProcedures = true from transaction. Remove transaction or set GetSchemaOptions.GetProcedures to false");
+
+                        if (!isActiveTransaction)
+                            dataConnection.BeginTransaction();
+
+                        try
+                        {
+                            foreach (var procedure in procedures)
+                            {
+                                if (!procedure.IsResultDynamic && (!procedure.IsFunction || procedure.IsTableFunction) && options.LoadProcedure(procedure))
+                                {
+                                    var commandText = sqlProvider.ConvertTableName(new System.Text.StringBuilder(),
+                                         procedure.CatalogName,
+                                         procedure.SchemaName,
+                                         procedure.ProcedureName).ToString();
+
+                                    LoadProcedureTableSchema(dataConnection, procedure, commandText, tables);
+                                }
+
+                                options.ProcedureLoadingProgress(procedures.Count, current++);
+                            }
+                        }
+                        finally
+                        {
+                            if (!isActiveTransaction)
+                                dataConnection.RollbackTransaction();
+                        }
+                    }
+                    else
+                        procedures = new List<ProcedureSchema>();
+
+                    var psp = GetProviderSpecificProcedures(dataConnection);
+
+                    if (psp != null)
+                        procedures.AddRange(psp);
+
+                    #endregion
+                }
+                else
+                    procedures = new List<ProcedureSchema>();
+
+                return ProcessSchema(new DatabaseSchema
+                {
+                    DataSource = GetDataSourceName(dbConnection),
+                    Database = GetDatabaseName(dbConnection),
+                    ServerVersion = dbConnection.ServerVersion,
+                    Tables = tables,
+                    Procedures = procedures,
+                    ProviderSpecificTypeNamespace = GetProviderSpecificTypeNamespace(),
+                    DataTypesSchema = DataTypesSchema,
+
+                }, options);
+
+            }
+            return base.GetSchema(dataConnection, options);
+        }
+    }
+    public class GetTablesSchemaOptions : GetSchemaOptions
+    {
+        public string[] ExcludedTables;
+        public string[] IncludedTables;
+
+        public GetTablesSchemaOptions()
+        {
+        }
     }
 }

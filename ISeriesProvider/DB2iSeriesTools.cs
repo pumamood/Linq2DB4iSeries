@@ -23,8 +23,31 @@ namespace LinqToDB.DataProvider.DB2iSeries
 		public const string DataReaderTypeName = AssemblyName + ".iDB2DataReader, " + AssemblyName;
 		public const string IdentityColumnSql = "identity_val_local()";
 		public const string MapGuidAsString = "MapGuidAsString";
+		public const string PreventNVarChar = "PreventNVarChar";
+		public const string MinVer = "MinVer";
 
-		public static string iSeriesDummyTableName(DB2iSeriesNamingConvention naming = DB2iSeriesNamingConvention.System)
+        public static DB2iSeriesNamingConvention GetDB2iSeriesNamingConvention(string connectionString)
+        {
+            var c = new IBM.Data.DB2.iSeries.iDB2ConnectionStringBuilder(connectionString);
+            switch (c.Naming)
+            {
+                default:
+                case IBM.Data.DB2.iSeries.iDB2NamingConvention.SQL:
+                    return DB2iSeriesNamingConvention.Sql;
+                case IBM.Data.DB2.iSeries.iDB2NamingConvention.System:
+                    return DB2iSeriesNamingConvention.System;
+            }
+        }
+
+        public static string iSeriesDummyTableName(this DataConnection connection)
+        {
+            return iSeriesDummyTableName(GetDB2iSeriesNamingConvention(connection.ConnectionString));
+        }
+        public static string iSeriesDummyTableName(string connectionString)
+        {
+            return iSeriesDummyTableName(GetDB2iSeriesNamingConvention(connectionString));
+        }
+            public static string iSeriesDummyTableName(DB2iSeriesNamingConvention naming = default)
 		{
 			var seperator = (naming == DB2iSeriesNamingConvention.System) ? "/" : ".";
 			return string.Format("SYSIBM{0}SYSDUMMY1", seperator);
