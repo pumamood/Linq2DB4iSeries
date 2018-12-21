@@ -263,58 +263,53 @@ namespace LinqToDB.DataProvider.DB2iSeries
             }
             DB2iSeriesTools.Initialized();
         }
-        public override void SetParameter(IDbDataParameter parameter, string name, DataType dataType__1, object value)
+
+        public override void SetParameter(IDbDataParameter parameter, string name, DbDataType dataType, object value)
         {
             if (value is sbyte)
             {
-                value = Convert.ToInt16(Convert.ToSByte(value));
-                dataType__1 = DataType.Int16;
+                value = (short)(sbyte)value;
+                dataType = dataType.WithDataType(DataType.Int16);
             }
             else if (value is byte)
             {
-                value = Convert.ToInt16(Convert.ToByte(value));
-                dataType__1 = DataType.Int16;
+                value = (short)(byte)value;
+                dataType = dataType.WithDataType(DataType.Int16);
             }
 
-            switch (dataType__1)
+            switch (dataType.DataType)
             {
                 case DataType.UInt16:
-                    dataType__1 = DataType.Int32;
+                    dataType = dataType.WithDataType(DataType.Int32);
                     if (value != null)
                         value = Convert.ToInt32(value);
                     break;
                 case DataType.UInt32:
-                    dataType__1 = DataType.Int64;
+                    dataType = dataType.WithDataType(DataType.Int64);
                     if (value != null)
                         value = Convert.ToInt64(value);
                     break;
                 case DataType.UInt64:
-                    dataType__1 = DataType.Decimal;
+                    dataType = dataType.WithDataType(DataType.Decimal);
                     if (value != null)
                         value = Convert.ToDecimal(value);
                     break;
-                case DataType.VarNumeric:
-                    dataType__1 = DataType.Decimal;
-                    break;
+                case DataType.VarNumeric: dataType = dataType.WithDataType(DataType.Decimal); break;
+                case DataType.DateTime2: dataType = dataType.WithDataType(DataType.DateTime); break;
                 case DataType.Char:
                 case DataType.VarChar:
                 case DataType.NChar:
                 case DataType.NVarChar:
-                    if (value is Guid)
-                    {
-                        value = ((Guid)value).ToString("D");
-                    }
+                    if (value is Guid) value = ((Guid)value).ToString("D");
                     else if (value is bool)
-                    {
-                        value = Common.ConvertTo<char>.From(value);
-                    }
+                        value = Common.ConvertTo<char>.From((bool)value);
                     break;
                 case DataType.Boolean:
                 case DataType.Int16:
                     if (value is bool)
                     {
                         value = (bool)value ? 1 : 0;
-                        dataType__1 = DataType.Int16;
+                        dataType = dataType.WithDataType(DataType.Int16);
                     }
                     break;
                 case DataType.Guid:
@@ -323,16 +318,16 @@ namespace LinqToDB.DataProvider.DB2iSeries
                         if (mapGuidAsString)
                         {
                             value = ((Guid)value).ToString("D");
-                            dataType__1 = DataType.NVarChar;
+                            dataType = dataType.WithDataType(DataType.NVarChar);
                         }
                         else
                         {
-                            value = ((Guid)value).ToByteArray();
-                            dataType__1 = DataType.VarBinary;
+                            value = ((Guid) value).ToByteArray();
+                            dataType = dataType.WithDataType(DataType.VarBinary);
                         }
                     }
                     if (value == null)
-                        dataType__1 = DataType.VarBinary;
+                        dataType = dataType.WithDataType(DataType.VarBinary);
                     break;
                 case DataType.Binary:
                 case DataType.VarBinary:
@@ -343,7 +338,6 @@ namespace LinqToDB.DataProvider.DB2iSeries
                         if (v.IsNull)
                             value = DBNull.Value;
                     }
-
                     break;
                 case DataType.Time:
                     if (value is TimeSpan)
@@ -351,17 +345,14 @@ namespace LinqToDB.DataProvider.DB2iSeries
                         value = new DateTime(((TimeSpan)value).Ticks);
                     }
                     break;
-                case DataType.DateTime2:
-                    dataType__1 = DataType.DateTime;
-                    break;
                 case DataType.Blob:
-                    base.SetParameter(parameter, Convert.ToString("@") + name, dataType__1, value);
+                    base.SetParameter(parameter, "@" + name, dataType, value);
                     _setBlob(parameter);
                     return;
             }
-            base.SetParameter(parameter, Convert.ToString("@") + name, dataType__1, value);
-        }
 
+            base.SetParameter(parameter, "@" + name, dataType, value);
+        }
         #endregion
 
         private static object GetNullValue(Type type)
